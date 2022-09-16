@@ -1,0 +1,617 @@
+---
+title: "Final Project Model"
+author: "Prahita, Ivy, Nate, Sadie"
+subtitle: MGSC 310 Final Project
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+
+```{r setup, include=FALSE}
+
+library(knitr)
+
+# As long as you are working in a Rstudio Project file, you shouldn't need to 'hard code' directories like this 
+# change to your own working directory
+#knitr::opts_knit$set(root.dir = 'C:/Users/doosti/Dropbox/MGSC_310')
+
+# set seed to your own favorite number
+set.seed(310)
+options(width=70)
+# if you want to prevent scientific format for numbers use this:
+options(scipen=99)
+
+# general rchunk code options
+opts_chunk$set(tidy.opts=list(width.wrap=50),tidy=FALSE, size = "vsmall")
+opts_chunk$set(message = FALSE,
+               warning = FALSE,
+               cache = TRUE,
+               autodep = TRUE,
+               cache.comments = FALSE,
+               collapse = TRUE,
+               fig.width = 5,  
+               fig.height = 4,
+               fig.align='center')
+
+```
+
+**Packages Required**
+```{r setup_2}
+
+# load all your libraries here
+library(ggplot2)
+library(tidyverse)
+library(rsample)
+library(tree)
+library(dplyr)
+library(GGally)
+library(plotROC)
+library(yardstick)
+library(glmnet)
+library(glmnetUtils)
+library(forcats)
+library(ggridges)
+library(coefplot)
+library(caret)
+# note, do not run install.packages() inside a code chunk. install them in the console outside of a code chunk. 
+
+```
+
+<br>
+
+**About The Dataset**
+This is a data set for estimation of obesity levels based on eating habits and physical condition in individuals from Colombia, Peru and Mexico. The data contains 17 attributes and 2111 records with individuals ages ranging from 14 to 61.
+
+The attributes related with eating habits: 
+- Frequent consumption of high caloric food (FAVC)
+- Frequency of consumption of vegetables (FCVC)
+- Number of main meals (NCP)
+- Consumption of food between meals (CAEC)
+- Consumption of water daily (CH20)
+- Consumption of alcohol (CALC). 
+
+The attributes related with the physical condition: 
+- Calories consumption monitoring (SCC)
+- Physical activity frequency (FAF)
+- Time using technology devices (TUE)
+- Transportation used (MTRANS)
+
+Other variables obtained:
+- Gender
+- Age
+- Height
+- Weight
+
+The class variable NObesity was created with the values of: 
+- Insufficient Weight (BMI < 18.5)
+- Normal Weight (18.5 > BMI < 24.9)
+- Overweight Level I & Overweight Level II (25 > BMI < 29.9)
+- Obesity Type I (30 > BMI < 34.9)
+- Obesity Type II (35 > BMI < 39.9)
+- Obesity Type III (BMI > 40)
+
+*BMI = weight / height x height
+
+***Aim of the Project***
+The main aim of this project is to study whether it is the eating habit or the physical condition or the other variables like gender, height, age and weight that leads to obesity the most. We aim to predict whether a person is obese or not based on these variables.
+
+**Prepare and Explore the Data Set**
+```{r}
+#load the data set 
+obesity <- read.csv("Datasets/ObesityDataSet2.csv")
+glimpse(obesity)
+
+#Removing NA from the Dataset
+obesity <- na.omit(obesity)
+colSums(is.na(obesity))
+
+#Explore the data set
+dim(obesity)
+glimpse(obesity)
+```
+
+<br>
+
+``` {r}
+#Rename variables
+obesity <- obesity %>% rename( eats_high_calor_food = FAVC, eats_veggies = FCVC, num_meals = NCP, eats_snacks = CAEC, drinks_water = CH2O, counts_calories = SCC, exercises_frequency = FAF, time_using_tech = TUE, drinks_alcohol = CALC, transport_methods = MTRANS, weight_category = NObeyesdad ) 
+
+#mutate factor variables
+obesity <- obesity %>% 
+  mutate(
+    Gender = factor(Gender),
+    family_history_with_overweight = factor(family_history_with_overweight),
+    eats_high_calor_food = factor(eats_high_calor_food),
+   drinks_alcohol = factor(drinks_alcohol),
+   eats_snacks = factor(eats_snacks),
+    SMOKE = factor(SMOKE),
+    counts_calories = factor(counts_calories),
+    transport_methods = factor(transport_methods),
+   Age = as.integer(Age),
+   drinks_water = as.integer(drinks_water))
+
+#added two more columns BMI and weight category number 
+obesity <- obesity %>% mutate( bmi = Weight / Height^2 ) %>%
+  mutate( weight_cat_num = case_when( ( weight_category == "Insufficient_Weight" ) ~ -1,
+          ( weight_category == "Normal_Weight" ) ~ 0,
+          ( weight_category == "Overweight_Level_I" ) ~ 1,
+          ( weight_category == "Overweight_Level_II" ) ~ 2,
+          ( weight_category == "Obesity_Type_I" ) ~ 3,
+          ( weight_category == "Obesity_Type_II" ) ~ 4,
+          ( weight_category == "Obesity_Type_III" ) ~ 5 ) )
+
+#added 1 more column manually: Obese_binary to categorize normal weight people vs. obese. 1 = Obese while 0 = normal.
+
+glimpse(obesity)
+```
+
+<br>
+```{r}
+prop.table(table(obesity$Obese_binary))
+table(obesity$Obese_binary)
+```
+As you can see here, there are 1244 people who are considered obese and 867 otherwise.
+
+<br>
+
+**Splitting the data set into training and testing**
+```{r}
+#splitting the data set into 70% training and 30% test
+set.seed(310)
+obesity_split <- initial_split(obesity,prop=0.7)
+obesity_train <- training(obesity_split)
+obesity_test <- testing(obesity_split)
+
+```
+
+<br>
+
+**Exploratory Analysis**
+```{r}
+ggplot(obesity_train, aes(x = Weight, y = weight_category)) +
+  geom_density_ridges()
+
+ggplot(obesity_train, aes(x = Weight, y = drinks_alcohol)) +
+  geom_density_ridges()
+
+obesity %>% 
+  group_by(drinks_alcohol) %>% 
+  summarise(
+    mean_weight = mean(Weight)
+  )
+```
+
+This plot of Outcome against Weight tells us that the the weight increases in order by insufficient_weight, Normal_weight, overweight_level_I, overweight_level_II, obesity_type_I, obesity_type_II, obesity_type_III. The two ends of the spectrum are normal_weight -> obesity_type_III.
+
+The plot of CALC against weight tells us that there appears to be no significant difference in weight between those who dont drink alcohol, sometimes drink alcohol, and frequently drink alcohol. This was confirmed by looking at the mean weight for each category. 
+
+<br>
+
+***Exploratory GGplot of BMI against Weight Category***
+```{r}
+#Create ggplot based on bmi and weight category
+ggplot( obesity_train, aes( y = bmi, x = factor( weight_cat_num ) ) ) +
+  geom_boxplot() +
+  ggtitle( 'BMI ~ Weight Category' ) +
+  xlab( 'Weight Category' ) +
+  scale_x_discrete( breaks = c( '-1', '0', '1', '2', '3', '4', '5' ) , labels = c( "Insuff. Wgt", "Normal Wgt", "Overweight L1", "Overweight L2", "Obesity T1", "Obesity T2", "Obesity T3" ) )
+```
+This plot tells us the weight category using the bmi of each individual. BMI is calculated using: weight / height x height
+
+As you can see in the plot:
+- Insufficient Weight  has a BMI of less than 18.5.
+- Normal Weight  has a BMI level of 18.5 to 24.9
+- Overweight Level I & Overweight Level II has a BMI level of 25 to 29.9
+- Obesity Type I has BMI level from 30 to 34.9.
+- Obesity Type II has a BMI level from 35 to 39.9
+- Obesity Type III has a BMI of over 40.
+
+The higher the BMI the more overweight a person is. In the plot the amount of people having Obesity Type III is the most following by normal weight, while Overweight level1 has the least amount of people following by Insufficient weight. 
+
+Using this you can figure out the weight category you are in. For our group members, all of us are in the Normal Weight category from 18.5 to 24.9.
+
+<br>
+
+### **Model #1: Logistic Model**
+```{r}
+logit_mod <- glm(Obese_binary ~ Age + Height + family_history_with_overweight + drinks_water + time_using_tech + counts_calories + exercises_frequency + transport_methods + eats_snacks + eats_veggies + num_meals + SMOKE + Weight,
+                 family = binomial, 
+                 data = obesity_train)
+summary(logit_mod)
+
+# Expatiating the coefficients to get the odds ratio impact
+round(exp(logit_mod$coefficients), 2)
+
+
+#Predicted probabilities of test and train
+preds_train <- predict(logit_mod, type = "response")
+preds_test <- predict(logit_mod, newdata = obesity_test,
+                       type = "response")
+head(preds_train)
+head(preds_test)
+
+#ROC curves
+
+results_train <-data.frame(scores = preds_train,
+                           true = obesity_train$Obese_binary)
+
+results_test <-data.frame(scores = preds_test,
+                           true = obesity_test$Obese_binary)
+
+roc_train <- ggplot(results_train, aes(m = scores, d = true)) + 
+  geom_roc(cutoffs.at = c(0.99,0.9,0.7,0.5,0.3,0.1,0)) + 
+  xlab("False Positive Rate") +
+  ylab("True Positive Rate") +
+  ggtitle("ROC Curve for the Training") +
+  theme_minimal()
+
+roc_test <- ggplot(results_test, aes(m=scores, d=true)) + 
+  geom_roc(cutoffs.at = c(0.99,0.9,0.7,0.5,0.3,0.1,0)) + 
+  xlab("False Positive Rate") +
+  ylab("True Positive Rate") +
+  ggtitle("ROC Curve for the Testing") +
+  theme_minimal()
+
+print(roc_train)
+print(roc_test)
+
+predicted_train <- ifelse(preds_train > 0.5, "1", "0")
+head(predicted_train)  
+predicted_test <- ifelse(preds_test > 0.5, "1", "0")
+head(predicted_test)
+
+
+
+#confusion Matrix
+logitres_train <- data.frame(
+  true = factor(obesity_train$Obese_binary),
+  predicted = factor(predicted_train),
+  prob_class1 = preds_train,
+  prob_class2 = 1 - preds_train
+)
+print(logitres_train)
+logitres_test <- data.frame(
+  true = factor(obesity_test$Obese_binary),
+  predicted = factor(predicted_test),
+  prob_class1 = preds_test,
+  prob_class2 = 1 - preds_test
+)
+
+cmtrain <- conf_mat(logitres_train,
+                    truth = true,
+                    estimate = predicted)
+print(cmtrain)
+
+cmtest <- conf_mat(logitres_test,
+                    truth = true,
+                    estimate = predicted)
+print(cmtest)
+
+
+
+# Accuracy, Sensitivity, Specificity for Training
+# acc = (TN + TP/ N)
+acc_train <- (669 + 384) / 1477
+print(acc_train)
+
+# sen = TP/P
+sen_train <- 669 / (669 + 199)
+print(sen_train)
+
+# spe = TN/(TN + FP)
+spe_train <- 384 / (384 + 225)
+print(spe_train)
+
+
+# Accuracy, Sensitivity, Specificity for Training
+# acc = (TN + TP/ N)
+acc_test <- (168 + 287) / 634
+print(acc_test)
+
+# sen = TP/P
+sen_test <- 287 / (287 + 89)
+print(sen_test)
+
+# spe = TN/(TN + FP)
+spe_test <- 168 / (168 + 90)
+print(spe_test)
+
+
+
+#calculating AUC
+calc_auc(roc_train)
+calc_auc(roc_test)
+
+
+```
+The coefficients with the most significance on obesity levels are, family history of obesity, eating snacks frequently, eating snacks sometimes, using public transportation, walking as a method of transportation, and counting calories. The coefficient for having a family member that is overweight is 1.71. When having a family member that is obese, the odds of being obese yourself goes up by .71. The coefficient for using public transportation is 1.93. This means when using public transportation, the odds of being obese goes up by .93. Eating snacks frequently and eating snacks sometimes effect obesity the same. Eating snack frequently increases your odds of being obese by 7.64 and eating snacks sometimes increases your chances of obesity by 8.04. This means that snacking overall increases obesity. The coefficient for counting calories is 0.46. When you count calories, the odds of being obese goes down by 0.51. Lastly, when walking is used as a form of transportation, your odds of being obese goes down by 0.78. 
+
+
+Sensitivity tells us that 77% of obese people were correctly identified by the logistic model. Specificity is 65% of people without heart disease were correctly identified by the model. The overall accuracy was 71%.
+
+
+<br>
+
+### ***Model #2: Lasso***
+```{r}
+# Creating lasso model
+lasso_mod <- cv.glmnet(Obese_binary ~ Age + Height + 
+                         family_history_with_overweight + 
+                         drinks_water + time_using_tech + 
+                         counts_calories + exercises_frequency + 
+                         transport_methods,
+                       data = obesity_train,
+                       alpha = 1)
+plot(lasso_mod)
+
+# Print the two model suggested values of lambda
+print(lasso_mod$lambda.1se)
+print(lasso_mod$lambda.min)
+
+# print coefficient using lambda.min
+coef(lasso_mod, s = lasso_mod$lambda.min) %>% 
+  round(3)
+
+# print coefficient using lambda.1se
+coef(lasso_mod, s = lasso_mod$lambda.1se) %>% 
+  round(3)
+
+# put into coefficient vector
+lasso_coefs <- data.frame(
+  lasso_min = coef(lasso_mod, s = lasso_mod$lambda.min) %>% 
+    round(3) %>% as.matrix() ,
+  lasso_1se = coef(lasso_mod, s = lasso_mod$lambda.1se) %>% 
+    round(3) %>% as.matrix() 
+) %>% rename(lasso_min = 1, lasso_1se = 2)
+
+lasso_coefs
+
+coefpath(lasso_mod)
+
+```
+Lambda.min: 0.0048
+Lambda.1se: 0.0231
+
+We chose to use a lasso model instead of a ridge model because a lasso works better when there are a few variables that matter a lot. The lasso model acts as a variables selector by shrinking the ones that matter the least to exactly zero. Although a wide range of variables were used in our model, only a few are good predictors of Obesity. To figure out the variables that help predict the best, we use the function coefpath(). For obesity, the 4 top predictors are family_history_with_overweight, transport_methodsWalking, transport_methodsPublic_Transportation, and counts_calories.
+
+
+<br>
+<br>
+
+
+
+
+### ***Model #3: Classification Tree and Predictions***
+
+We went through a couple iterations with our decision tree model until we found the most accurate, least erroneous version that still answered our business question. 
+
+All of our models went through the same process before the final outcome was produced and analyzed:
+<br>
+
+ 1) Run the model 
+ 2) Make predicitions for model
+ 3) Prune the tree
+ 4) Analyze Pruned model
+ 5) If needed, consider new model; Repeat steps 1-4 
+ 
+<br>
+
+Our initial model was the outcome variable (Obese_binary) run against all our variables in the dataset. The decision to do this was based on the initial business question we were trying to answer: which variable overall is the most important in determining a positive obesity diagnosis?
+
+We followed through the steps in our process as laid above, and analyzed the confusion matrices for each model to determine its strength as a model, starting with our first tree model....
+
+<br>
+
+#### Initial Model ####
+We included every variable in this model, minus the weight category variable.
+
+Our decision to not include the weight category variable (which is one of the same reasons we chose the variable Obese_binary as our outcome variable), is simply because weight category is redundant in our interpretation. It is obvious that a person who falls in the "Overweight" weight category is certain to be the only indicator variable that can give an obese diagnosis. In other words, we are simply trying to measure if a person will be given a diagnosis of being obese or not; weight category is another decision variable if we were trying to understand how obese a person would get in their life. 
+
+Because we are trying to have a binary outcome ( Obese or Not) we will omit weight category as a variable in our model. 
+
+We will run this model against every other variable.
+
+```{r}
+tree_initial <- tree(factor(Obese_binary) ~ .,
+                     data = obesity_train)
+plot(tree_initial)
+text(tree_initial,pretty = 0,cex=0.6)
+```
+<br>
+
+We will do our predictions for this model with test data to see how overfit this model is.
+```{r}
+# prediction for test tree
+prediction_test_initial <- predict(tree_initial,
+                           newdata = obesity_test,
+                           type = "class")
+
+head(prediction_test_initial)
+table(prediction_test_initial, obesity_test$Obese_binary)
+```
+<br>
+
+Clearly we can see from the produced matrices, there is definately overfitting since it appears that the sensitivity and specificity levels are close to 100% for each measure. So far, it looks like this model will be prone to overfitting.
+
+<br>
+
+In order to minimize errors and overfitting even more, we prune the tree to determine the best size and reduce variance.
+
+```{r}
+cv_tree_initial <- cv.tree(tree_initial)
+print(cv_tree_initial)
+
+# find the best tree size
+cv_initial_df <- data.frame(
+  size = cv_tree_initial$size,
+  mse = cv_tree_initial$dev
+)
+print(cv_initial_df)
+# plot the error vs tree 
+ggplot(cv_initial_df, aes(x = size, y =mse)) +
+  geom_point() +
+  geom_line() +
+  xlab("Tree Size") + ylab("Mse (CV)")
+```
+
+<br>
+
+As we can see from our cross-validation method, it appears that 10 leaves on our tree gives us the least Mean-Squared Error, and a lower means the model would perform its best while not overfitting and having too much variance.
+<br>
+
+We can implement the model with 10 final leaves as shown below
+```{r}
+
+# prune the tree by the best size
+pruned_initial <- prune.tree(tree_initial, best = 10)
+
+# plot the pruned tree
+plot(pruned_initial)
+text(pruned_initial)
+
+
+```
+
+As we can see here the final tree looks almost similar to the unpruned version, with BMI being the most imoprtant indicator of an obese diagnosis.
+
+
+
+#### Second Model ####
+
+While our first model certainly answered our initial question, we wanted to take a new direction with our business question while considering the role weight-based factors alone play in an obesity diagnosis.
+
+We wanted to shift our final model in the direction of having no weight-based variables involved, to see which outside and lifestyle factors are most likely to lead to an obesity diagnosis. 
+
+We omitted BMI, weight category, Weight as variables in our model to view the most important outside factor in contrinuting to an obesity diagnosis.
+<br>
+
+As we did in the first model, we set up our model and made predictions for the test set.
+
+```{r}
+
+tree_second <- tree(factor(Obese_binary) ~ Age + Height + 
+                         family_history_with_overweight + 
+                         drinks_water + time_using_tech + 
+                         counts_calories + exercises_frequency + 
+                         transport_methods + eats_snacks + SMOKE + drinks_alcohol + eats_veggies+num_meals+eats_high_calor_food,
+                     data = obesity_train)
+plot(tree_second)
+text(tree_second,pretty = 0,cex=0.6)
+
+# prediction for test tree
+prediction_second <- predict(tree_second,
+                           newdata = obesity_test,
+                           type = "class")
+
+head(prediction_second)
+table(prediction_second, obesity_test$Obese_binary)
+
+
+# cross validating and testing data
+cv_tree_obesity_2 <- cv.tree(tree_second)
+print(cv_tree_obesity_2)
+
+# find the best tree size
+cv_tree_df_2 <- data.frame(
+  size = cv_tree_obesity_2$size,
+  mse = cv_tree_obesity_2$dev
+)
+print(cv_tree_df_2)
+# plot the error vs tree 
+ggplot(cv_tree_df_2, aes(x = size, y =mse)) +
+  geom_point() +
+  geom_line() +
+  xlab("Tree Size") + ylab("Mse (CV)")
+```
+
+As we can see from this model, the second prediction confusion matrices are much more varied and the sensitivity and specificity measures are lower, but certainly not indicative of the model being overfit. 
+
+Already, we can tell that this model will bring us closer to answering our questions, but there is also room to increase our specificity and sensitivity matrices; this indicates we will to adjust in order to find a final, more optimal model.
+<br>
+
+As usual, we will prune the tree to find the the ideal number of leaves to give us the lowest MSE; according to the plot above, it looks like 14 leaves gives us the lowest MSE.
+
+```{r}
+prunned_tree_2 <- prune.tree(tree_second, best = 14)
+
+# plot the pruned tree
+plot(prunned_tree_2)
+text(prunned_tree_2)
+```
+
+<br>
+
+This model is a good one in terms of not overfitting, having a low MSE in the pruned version and generally acceptable sensitivity, but we can improve this model to have more acceptable levels of indicators. Which brings us to the final version of our model.
+
+<br>
+
+#### Final Model ####
+
+Our final iteration, which was the one we adopted as the best of all three iterations.
+
+For our final model, we built off our second model. The issue with out second model was with some variables, which were inherintly difficult to interpret. Variables like eats_veggies or num_meals did not specify if the frequency of the entry (i.e - was this number of times per week OR per day OR per month?); this made it hard to understand how EXACTLY these variables played a role in our tree model and in understanding what it meant when predicting the outcome variable.
+<br>
+
+We decided for simplicity sake to leave them out of this model.
+<br>
+
+We followed the same steps as our process as shown below:
+
+```{r}
+# make classification tree
+# train classification tree
+
+tree_obesity <- tree(factor(Obese_binary) ~ Age + Height + 
+                         family_history_with_overweight + 
+                         drinks_water + time_using_tech + 
+                         counts_calories + exercises_frequency + 
+                         transport_methods,
+                     data = obesity_train)
+plot(tree_obesity)
+text(tree_obesity,pretty = 0,cex=0.6)
+
+
+```
+<br>
+```{r}
+# prediction for test tree
+prediction_test <- predict(tree_obesity,
+                           newdata = obesity_test,
+                           type = "class")
+
+head(prediction_test)
+table(prediction_test, obesity_test$Obese_binary)
+
+
+# cross validating and testing data
+cv_tree_obesity <- cv.tree(tree_obesity)
+print(cv_tree_obesity)
+
+# find the best tree size
+cv_tree_df <- data.frame(
+  size = cv_tree_obesity$size,
+  mse = cv_tree_obesity$dev
+)
+print(cv_tree_df)
+# plot the error vs tree 
+ggplot(cv_tree_df, aes(x = size, y =mse)) +
+  geom_point() +
+  geom_line() +
+  xlab("Tree Size") + ylab("Mse (CV)")
+
+# prune the tree by the best size
+prunned.tree <- prune.tree(tree_obesity, best = 10)
+
+# plot the pruned tree
+plot(prunned.tree)
+text(prunned.tree)
+```
+
+<br> 
+
+From this model, we can see that having family history with obesity is the most important variable that leads to a positive diagnosis for Obesity. It is intersting to note that this is also in line with our lasso model, which showed that the same variable was also significant in predicting a positive Obesity Diagnosis. 
+
+Comparing confusion matrices for the test predictions also show that the final  model has a high 
+
+Hence, why we preferred our final iteration of our model and feel it accurately displays a relationship between an obesity diagnosis and variable, non weight-related factors. Our model overall helps provide insight into what factors cause obesity and can provide incentive to which of these factors would be worthy of furhter consideration as a major factor in diagnosing or recognizing a link to Obesity.
